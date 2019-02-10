@@ -1,6 +1,5 @@
-#define GLFW_INCLUDE_VULKAN
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glfw/glfw3.h>
+
 #include <glm/glm.hpp>
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
@@ -9,21 +8,24 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_sdk_platform.h>
 
+
 #include <core/string/string_format.h>
 #include <core/error.h>
 #include <core/log.h>
 #include <core/platform.h>
 #include <core/enum.h>
+#include <core/string/utility.h>
 #include <core/container/vector.h>
 #include <core/conversion.h>
 #include <core/io/file_system.h>
 #include <core/io/file.h>
 #include <core/io/path.h>
-#include <core/unique_ptr.h>
-#include <core/utility.h>
+#include <core/io/file_system_layer.h>
+#include <core/container/small_vector.h>
+#include <core/memory/memory_arena.h>
+#include <core/memory/utility.h>
 
 // TODO: create wrapper/ext
-// TODO: update stb
 #define STB_IMAGE_IMPLEMENTATION
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wreserved-id-macro"
@@ -40,9 +42,9 @@
 
 #include <libc++/algorithm>
 #include <libc++/limits>
+#include <libc++/span>
 
-#include <cstdlib>
-#include <span>
+// TODO: do we need these
 #include <chrono>
 #include <array>
 
@@ -114,7 +116,6 @@ const Vertex TEST_MESH_VERTS[] = {
 
 const ui16 TEST_MESH_INDICES[] = {
     0, 1, 2, 2, 3, 0,
-
     4, 5, 6, 6, 7, 4
 };
 
@@ -350,9 +351,9 @@ public:
         m_graphics_queue = VK_NULL_HANDLE;
         m_present_queue = VK_NULL_HANDLE;
 
-        destroyWindowSurface();
-
         destroyLogicalDevice();
+
+        destroyWindowSurface();
 
         if (m_validation_enabled)
         {
@@ -532,7 +533,7 @@ private:
 
         if (0 != family_cnt)
         {
-            Vector<VkQueueFamilyProperties> props(family_cnt);
+            SmallVector<VkQueueFamilyProperties, 10> props(family_cnt);
             vkGetPhysicalDeviceQueueFamilyProperties(device, &family_cnt, props.data());
 
             si32 curr_idx = 0;
@@ -566,24 +567,24 @@ private:
         return queues_desc;
     }
 
-    static b8 checkDeviceExtensions(VkPhysicalDevice device, std::span<char const * const> extensions)
+    static b8 checkDeviceExtensions(VkPhysicalDevice device, wstd::span<char const * const> extensions)
     {
         ui32 device_ext_cnt = 0;
         vkEnumerateDeviceExtensionProperties(device, nullptr, &device_ext_cnt, nullptr);
 
         if (device_ext_cnt != 0)
         {
-            Vector<VkExtensionProperties> available_exts(device_ext_cnt);
+            SmallVector<VkExtensionProperties, 15> available_exts(device_ext_cnt);
             vkEnumerateDeviceExtensionProperties(device, nullptr, &device_ext_cnt, available_exts.data());
 
             for (auto const ext_name : extensions)
             {
-                auto ext_iter = find_if(begin(available_exts), end(available_exts), [ext_name] (VkExtensionProperties const & props) 
+                auto ext_iter = wstd::find_if(wstd::begin(available_exts), wstd::end(available_exts), [ext_name] (VkExtensionProperties const & props) 
                     {
                         return 0 == strcmp(props.extensionName, ext_name);
                     });
 
-                if (ext_iter == end(available_exts))
+                if (ext_iter == wstd::end(available_exts))
                 {
                     return false;
                 }
@@ -630,18 +631,18 @@ private:
             features.samplerAnisotropy;
     }
 
-    VkSurfaceFormatKHR chooseSwapChainSurfaceFormat(std::span<VkSurfaceFormatKHR const> formats)
+    VkSurfaceFormatKHR chooseSwapChainSurfaceFormat(wstd::span<VkSurfaceFormatKHR const> formats)
     {
         if ((1 == formats.size()) && (VK_FORMAT_UNDEFINED == formats[0].format))
         {
             return {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
         }
 
-        auto const format_iter = wstd::find_if(begin(formats), end(formats), [] (VkSurfaceFormatKHR const & fmt) {
-            return (fmt.format == VK_FORMAT_B8G8R8A8_UNORM) && (VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+        auto const format_iter = wstd::find_if(wstd::begin(formats), wstd::end(formats), [] (VkSurfaceFormatKHR const & fmt) {
+            return (fmt.format == VK_FORMAT_B8G8R8A8_UNORM) && (fmt.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
         });
 
-        if (end(formats) != format_iter)
+        if (wstd::end(formats) != format_iter)
         {
             return *format_iter;
         }
@@ -649,11 +650,11 @@ private:
         return formats[0];
     }
 
-    VkPresentModeKHR chooseSwapChainPresentMode(std::span<VkPresentModeKHR const> present_modes)
+    VkPresentModeKHR chooseSwapChainPresentMode(wstd::span<VkPresentModeKHR const> present_modes)
     {
-        auto const present_mode_iter = wstd::find(begin(present_modes), end(present_modes), VK_PRESENT_MODE_MAILBOX_KHR);
+        auto const present_mode_iter = wstd::find(wstd::begin(present_modes), wstd::end(present_modes), VK_PRESENT_MODE_MAILBOX_KHR);
 
-        if (present_mode_iter != end(present_modes))
+        if (present_mode_iter != wstd::end(present_modes))
         {
             return VK_PRESENT_MODE_MAILBOX_KHR;
         }
@@ -677,34 +678,34 @@ private:
         }
     }
 
-    static b8 readFile(char const * file_path, UniquePtr<ui8 []> & data, usize & data_size)
+    static MemoryArena readFile(char const * file_path, AllocatorView alloc)
     {
         File file_hdl = FS::openFileRead(file_path);
 
         if (!file_hdl.isNull())
         {
-            data_size = numericCast<usize>(file_hdl.getLength());
+            auto const data_size = numericCast<usize>(file_hdl.getLength());
 
             if (data_size != 0)
             {
-                data = makeUnique<ui8 []>(data_size);
-                auto const byte_cnt = file_hdl.read({data.get(), numericCast<sptrdiff>(data_size)});
+                ui8 * const data = static_cast<ui8 *>(alloc.allocate(data_size));
+                auto const byte_cnt = file_hdl.read({data, numericCast<sptrdiff>(data_size)});
 
                 sbWarn(data_size == numericCast<usize>(byte_cnt));
 
-                return true;
+                return {data, data_size};
             }
         }
 
-        return false;
+        return {};
     }
 
-    VkShaderModule createShaderModule(std::span<ui8 const> byte_code)
+    VkShaderModule createShaderModule(MemoryArena byte_code)
     {
         VkShaderModuleCreateInfo create_info = {};
         create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        create_info.pCode = reinterpret_cast<ui32 const *>(byte_code.data());
-        create_info.codeSize = numericCast<usize>(byte_code.size());
+        create_info.pCode = reinterpret_cast<ui32 const *>(byte_code.m_ptr);
+        create_info.codeSize = numericCast<usize>(byte_code.m_size);
 
         VkShaderModule shader_module;
         if (VK_SUCCESS != vkCreateShaderModule(m_device, &create_info, nullptr, &shader_module))
@@ -824,21 +825,6 @@ private:
 
     void copyBuffer(VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size)
     {
-        // VkCommandBufferAllocateInfo alloc_info = {};
-        // alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        // alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        // alloc_info.commandPool = m_cmd_pool;
-        // alloc_info.commandBufferCount = 1;
-
-        // VkCommandBuffer copy_cmd_buffer;
-        // vkAllocateCommandBuffers(m_device, &alloc_info, &copy_cmd_buffer);
-
-        // VkCommandBufferBeginInfo cmd_begin_info = {};
-        // cmd_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        // cmd_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        // vkBeginCommandBuffer(copy_cmd_buffer, &cmd_begin_info);
-
         VkCommandBuffer copy_cmd_buffer = beginOnTimeCommandBuffer();
 
         VkBufferCopy copy_region = {};
@@ -848,19 +834,6 @@ private:
         vkCmdCopyBuffer(copy_cmd_buffer, src_buffer, dst_buffer, 1, &copy_region);
 
         endOneTimeCommandBuffer(copy_cmd_buffer);
-
-        // vkEndCommandBuffer(copy_cmd_buffer);
-
-        // VkSubmitInfo sub_info = {};
-        // sub_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        // sub_info.commandBufferCount = 1;
-        // sub_info.pCommandBuffers = &copy_cmd_buffer;
-
-        // // Graphics (and compute) queues shall also have memory transfer (VK_QUEUE_TRANSFER)
-        // vkQueueSubmit(m_graphics_queue, 1, &sub_info, VK_NULL_HANDLE);
-        // vkQueueWaitIdle(m_graphics_queue);
-
-        // vkFreeCommandBuffers(m_device, m_cmd_pool, 1, &copy_cmd_buffer);
     }
 
     b8 createDescriptorSets()
@@ -910,7 +883,7 @@ private:
             write_set[1].descriptorCount = 1;
             write_set[1].pImageInfo = &img_info;
 
-            vkUpdateDescriptorSets(m_device, wstd::size(write_set), write_set, 0, nullptr);
+            vkUpdateDescriptorSets(m_device, (ui32)wstd::size(write_set), write_set, 0, nullptr);
         }
 
         return true;
@@ -935,7 +908,7 @@ private:
 
         VkDescriptorPoolCreateInfo pool_info = {};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_info.poolSizeCount = wstd::size(desc_sizes);
+        pool_info.poolSizeCount = (ui32)std::size(desc_sizes);
         pool_info.pPoolSizes = desc_sizes;
         pool_info.maxSets = (ui32)m_swap_chain_image_views.size();
 
@@ -1004,6 +977,7 @@ private:
     {
         VkBuffer staging_buffer;
         VkDeviceMemory staging_buffer_mem;
+        void * buffer_data = nullptr;
 
         if (!createBuffer(sizeof(TEST_MESH_INDICES), 
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
@@ -1015,17 +989,16 @@ private:
             return false;
         }
 
-        void * buffer_data = nullptr;
         // Make the memory available on CPU for copy i.e. get a CPU visible pointer to this memory
         vkMapMemory(m_device, staging_buffer_mem, 0, sizeof(TEST_MESH_INDICES), 0, &buffer_data);
         memcpy(buffer_data, TEST_MESH_INDICES, sizeof(TEST_MESH_INDICES));
         vkUnmapMemory(m_device, staging_buffer_mem);
 
         if (!createBuffer(sizeof(TEST_MESH_INDICES), 
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
-            m_index_buffer, 
-            m_index_buffer_mem))
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+                m_index_buffer, 
+                m_index_buffer_mem))
         {
             sbLogE("Failed to create test mesh index buffer");
             return false;
@@ -1152,19 +1125,6 @@ private:
         return img_view;
     }
 
-    b8 createTextureImageVew()
-    {
-        m_texture_img_view = createImageView(m_texture_img, VK_FORMAT_R8G8B8A8_UNORM);
-
-        if (VK_NULL_HANDLE == m_texture_img_view)
-        {
-            sbLogE("Failed to create texture image view");
-            return false;
-        }
-
-        return true;
-    }
-
     void destroyTextureSampler()
     {
         vkDestroySampler(m_device, m_texture_sampler, nullptr);
@@ -1194,6 +1154,20 @@ private:
         if (VK_SUCCESS != vkCreateSampler(m_device, &info, nullptr, &m_texture_sampler))
         {
             sbLogE("failed to create texture sampler");
+            return false;
+        }
+
+        return true;
+    }
+
+
+    b8 createTextureImageVew()
+    {
+        m_texture_img_view = createImageView(m_texture_img, VK_FORMAT_R8G8B8A8_UNORM);
+
+        if (VK_NULL_HANDLE == m_texture_img_view)
+        {
+            sbLogE("Failed to create texture image view");
             return false;
         }
 
@@ -1247,6 +1221,20 @@ private:
 
     void destroyDepthBuffer()
     {
+        if (m_depth_img_view != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(m_device, m_depth_img_view, nullptr);
+        }
+
+        if (m_depth_img != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, m_depth_img_mem, nullptr);
+            vkDestroyImage(m_device, m_depth_img, nullptr);
+        }
+
+        m_depth_img = VK_NULL_HANDLE;
+        m_depth_img_mem = VK_NULL_HANDLE;
+        m_depth_img_view = VK_NULL_HANDLE;
     }
 
     b8 createDepthBuffer()
@@ -1286,9 +1274,9 @@ private:
         si32 tex_height = 0;
         si32 tex_channels = 0;
 
-        char abs_file_path[PHYSICAL_PATH_MAX_LEN];
+        char abs_file_path[PPath::MAX_LEN];
         strCpyT(abs_file_path, FS::getLayerPhysicalPath(HashStr{"data"}));
-        concatPhysicalPaths(abs_file_path, "texture.jpg");
+        PPath::concat(abs_file_path, "texture.jpg");
 
         stbi_uc * pixels = stbi_load(abs_file_path, &tex_width, &tex_height, &tex_channels, STBI_rgb_alpha);
         
@@ -1304,10 +1292,10 @@ private:
         VkDeviceMemory staging_buffer_mem;
 
         if (!createBuffer(tex_size,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            staging_buffer,
-            staging_buffer_mem))
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                staging_buffer,
+                staging_buffer_mem))
         {
             sbLogE("Failed to create texture image staging buffer");
             return false;
@@ -1410,28 +1398,28 @@ private:
     {
         VkBuffer staging_buffer;
         VkDeviceMemory staging_buffer_mem;
+        void * buffer_data = nullptr;
 
         if (!createBuffer(sizeof(TEST_MESH_VERTS), 
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
-            staging_buffer, 
-            staging_buffer_mem))
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+                staging_buffer, 
+                staging_buffer_mem))
         {
             sbLogE("Failed to create test mesh staging vertex buffer");
             return false;
         }
 
-        void * buffer_data = nullptr;
         // Make the memory available on CPU for copy i.e. get a CPU visible pointer to this memory
         vkMapMemory(m_device, staging_buffer_mem, 0, sizeof(TEST_MESH_VERTS), 0, &buffer_data);
         memcpy(buffer_data, TEST_MESH_VERTS, sizeof(TEST_MESH_VERTS));
         vkUnmapMemory(m_device, staging_buffer_mem);
 
         if (!createBuffer(sizeof(TEST_MESH_VERTS), 
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
-            m_vertex_buffer, 
-            m_vertex_buffer_mem))
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+                m_vertex_buffer, 
+                m_vertex_buffer_mem))
         {
             sbLogE("Failed to create test mesh vertex buffer");
             return false;
@@ -1505,7 +1493,7 @@ private:
             vkCmdBindDescriptorSets(m_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 0, 1, &m_desc_sets[i], 0, nullptr);
 
             //vkCmdDraw(m_cmd_buffers[i], wstd::size(TEST_MESH_VERTS), 1, 0, 0);
-            vkCmdDrawIndexed(m_cmd_buffers[i], wstd::size(TEST_MESH_INDICES), 1, 0, 0, 0);
+            vkCmdDrawIndexed(m_cmd_buffers[i], (ui32)wstd::size(TEST_MESH_INDICES), 1, 0, 0, 0);
 
             vkCmdEndRenderPass(m_cmd_buffers[i]);
 
@@ -1623,7 +1611,7 @@ private:
         dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         dep.srcAccessMask = 0;
         dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dep.dstStageMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
         render_pass_info.dependencyCount = 1;
         render_pass_info.pDependencies = &dep;
@@ -1661,7 +1649,7 @@ private:
 
         VkDescriptorSetLayoutCreateInfo layout_info = {};
         layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_info.bindingCount = wstd::size(bindings);
+        layout_info.bindingCount = numericCast<ui32>(wstd::size(bindings));
         layout_info.pBindings = bindings;
 
         if (VK_SUCCESS != vkCreateDescriptorSetLayout(m_device, &layout_info, nullptr, &m_descriptor_set_layout))
@@ -1681,31 +1669,37 @@ private:
 
     b8 createGraphicsPipeline()
     {
+        auto global_heap = getGlobalHeapView();
+
         // Shader creation
-        UniquePtr<ui8[]> shader_data;
-        usize shader_data_size = 0;
-        
-        if (!readFile("/data/vert.spv", shader_data, shader_data_size))
+        auto mem_arena = readFile("/data/vert.spv", global_heap);
+
+        if (mem_arena.isEmpty())
         {
             sbLogE("Failed to read '/data/vert.spv'");
             return false;
         }
 
-        VkShaderModule vert_module = createShaderModule({shader_data.get(), numericCast<si64>(shader_data_size)});
+        VkShaderModule vert_module = createShaderModule(mem_arena);
+        global_heap.deallocate(mem_arena.m_ptr);
 
         if (VK_NULL_HANDLE == vert_module)
         {
             return false;
         }
 
-        if (!readFile("/data/frag.spv", shader_data, shader_data_size))
+        mem_arena = readFile("/data/frag.spv", global_heap);
+
+        if (mem_arena.isEmpty())
         {
             destroyShaderModule(vert_module);
             sbLogE("Failed to read '/data/frag.spv'");
             return false;
         }
 
-        VkShaderModule frag_module = createShaderModule({shader_data.get(), numericCast<si64>(shader_data_size)});
+        VkShaderModule frag_module = createShaderModule(mem_arena);
+        global_heap.deallocate(mem_arena.m_ptr);
+
         if (VK_NULL_HANDLE == frag_module)
         {
             destroyShaderModule(vert_module);
@@ -1727,7 +1721,7 @@ private:
         vert_input_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vert_input_stage_info.vertexBindingDescriptionCount = 1;
         vert_input_stage_info.pVertexBindingDescriptions = &vert_input_binding;
-        vert_input_stage_info.vertexAttributeDescriptionCount = vert_attr_desc.size();
+        vert_input_stage_info.vertexAttributeDescriptionCount = numericCast<ui32>(vert_attr_desc.size());
         vert_input_stage_info.pVertexAttributeDescriptions = vert_attr_desc.data();
 
         VkPipelineInputAssemblyStateCreateInfo input_assembly_stage_info = {};
@@ -1747,8 +1741,8 @@ private:
         VkViewport view_port = {};
         view_port.x = 0.f;
         view_port.y = 0.f;
-        view_port.width = m_swap_chain_img_ext.width;
-        view_port.height = m_swap_chain_img_ext.height;
+        view_port.width = (float)m_swap_chain_img_ext.width;
+        view_port.height = (float)m_swap_chain_img_ext.height;
         view_port.minDepth = 0.f;
         view_port.maxDepth = 1.f;
 
@@ -1939,11 +1933,11 @@ private:
             create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         }
         // Multiple queues are accesing the swap chain image and we don't want to add code to handle this ... let Vulkan doing it
-        // Indeed, we could set it to VK_SHARING_MODE_EXCLUSIVE and explicitely tell Vulkan when we are switching queues
+        // Alternatively, we could set it to VK_SHARING_MODE_EXCLUSIVE and explicitely tell Vulkan when we are switching queues
         else
         {
             create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-            create_info.queueFamilyIndexCount = wstd::size(queue_indices);
+            create_info.queueFamilyIndexCount = numericCast<ui32>(wstd::size(queue_indices));
             create_info.pQueueFamilyIndices = queue_indices;
         }
 
@@ -1961,7 +1955,6 @@ private:
 
         create_info.oldSwapchain = VK_NULL_HANDLE;
 
-        // m_swap_chain
         auto const err = vkCreateSwapchainKHR(m_device, &create_info, nullptr, &m_swap_chain);
         if (VK_SUCCESS != err)
         {
@@ -1990,6 +1983,7 @@ private:
 
     b8 createWindowSurface(GLFWwindow * wnd_hdl)
     {
+        // TODO: pass the window surface as parameter
         VkResult const err = glfwCreateWindowSurface(m_instance, wnd_hdl, nullptr, &m_surface);
 
         if (VK_SUCCESS != err)
@@ -2031,12 +2025,12 @@ private:
         device_info.pQueueCreateInfos = &queue_info;
         device_info.queueCreateInfoCount = 1;
         device_info.pEnabledFeatures = &device_features;
-        device_info.enabledExtensionCount = wstd::size(REQUIRED_PHYSICAL_DEVICE_EXTENSIONS);
+        device_info.enabledExtensionCount = numericCast<ui32>(wstd::size(REQUIRED_PHYSICAL_DEVICE_EXTENSIONS));
         device_info.ppEnabledExtensionNames = REQUIRED_PHYSICAL_DEVICE_EXTENSIONS;
 
         if (m_validation_enabled)
         {
-            device_info.enabledLayerCount = wstd::size(DEFAULT_VALIDATION_LAYERS);
+            device_info.enabledLayerCount = numericCast<ui32>(wstd::size(DEFAULT_VALIDATION_LAYERS));
             device_info.ppEnabledLayerNames = DEFAULT_VALIDATION_LAYERS;
         }
 
@@ -2084,7 +2078,7 @@ private:
             return false;
         }
 
-        Vector<VkPhysicalDevice> phys_devices(phys_device_cnt);
+        SmallVector<VkPhysicalDevice, 5> phys_devices(phys_device_cnt);
         vkEnumeratePhysicalDevices(m_instance, &phys_device_cnt, phys_devices.data()); 
 
         for (auto const &phys_device : phys_devices)
@@ -2173,12 +2167,12 @@ private:
         {
             ui32 vk_layer_cnt = 0;
             vkEnumerateInstanceLayerProperties(&vk_layer_cnt, nullptr);
-            ui32 required_layer_cnt = wstd::size(DEFAULT_VALIDATION_LAYERS);
+            ui32 validation_layer_cnt = numericCast<ui32>(wstd::size(DEFAULT_VALIDATION_LAYERS));
 
             if ((0 != vk_layer_cnt) &&
-                (0 != required_layer_cnt))
+                (0 != validation_layer_cnt))
             {
-                Vector<VkLayerProperties> vk_layers(vk_layer_cnt);
+                SmallVector<VkLayerProperties, 5> vk_layers(vk_layer_cnt);
 
                 vkEnumerateInstanceLayerProperties(&vk_layer_cnt, vk_layers.data());
 
@@ -2199,11 +2193,11 @@ private:
 
                     if (wstd::end(DEFAULT_VALIDATION_LAYERS) != layer_name_iter)
                     {
-                        --required_layer_cnt;
+                        --validation_layer_cnt;
 
-                        if (0 == required_layer_cnt)
+                        if (0 == validation_layer_cnt)
                         {
-                            layer_cnt = wstd::size(DEFAULT_VALIDATION_LAYERS);
+                            layer_cnt = numericCast<ui32>(wstd::size(DEFAULT_VALIDATION_LAYERS));
                             break;
                         }
                     }
@@ -2213,6 +2207,15 @@ private:
 
         if (m_verbose)
         {
+            if (0 != layer_cnt)
+            {
+                sbLogI("Vulkan validation layers enabled:");
+                for (auto layer_name : DEFAULT_VALIDATION_LAYERS)
+                {
+                    sbLogI("    - {}", layer_name);
+                }
+            }
+
             if (!required_vk_exts.empty())
             {
                 sbLogI("Required Vulkan extensions:");
@@ -2220,7 +2223,7 @@ private:
                 {
                     sbLogI("    - {}", ext_name);
                 }
-            }               
+            }    
         }
 
         inst_info.enabledExtensionCount = numericCast<ui32>(required_vk_exts.size());
@@ -2276,10 +2279,12 @@ static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
 
 int main()
 {
+    char working_dir[PPath::MAX_LEN];
+
     FS::InitParams fs_params;
     FS::LayerDesc layer_descs[] = {
         {"/data/",
-        getWorkingDirectory(),
+        FS::createLocalFileSystemLayer(getWorkingDirectory(working_dir, wstd::size(working_dir))),
         HashStr{"data"}}
     };
 
@@ -2301,7 +2306,6 @@ int main()
 
     glfwSetWindowUserPointer(wnd_hdl, &app);
     glfwSetFramebufferSizeCallback(wnd_hdl, &framebufferResizeCallback);
-
 
     b8 const app_err = app.initialize(wnd_hdl, true, true);
     sbAssert(app_err);
