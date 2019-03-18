@@ -40,6 +40,9 @@
 #include <stb/stb_image.h>
 #pragma clang diagnostic pop
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tinyobjloader/tiny_obj_loader.h>
+
 #include <libc++/algorithm>
 #include <libc++/limits>
 #include <libc++/span>
@@ -114,7 +117,7 @@ const Vertex TEST_MESH_VERTS[] = {
     {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.f, 1.f}}
 };
 
-const ui16 TEST_MESH_INDICES[] = {
+const ui32 TEST_MESH_INDICES[] = {
     0, 1, 2, 2, 3, 0,
     4, 5, 6, 6, 7, 4
 };
@@ -168,6 +171,8 @@ class VkTestApp
     VkDeviceMemory m_texture_mem = VK_NULL_HANDLE;
     VkImageView m_texture_img_view = VK_NULL_HANDLE;
     VkSampler m_texture_sampler = VK_NULL_HANDLE;
+
+    usize m_model_indices_cnt = 0;
 
     struct QueueFamiliesDesc
     {
@@ -270,12 +275,19 @@ public:
             return false;
         }
 
-        if (!createVertexBuffer())
+        Vector<Vertex> vertices;
+        Vector<ui32> indices;
+        if (!loadModel(vertices, indices))
         {
             return false;
         }
 
-        if (!createIndexBuffer())
+        if (!createVertexBuffer(vertices))
+        {
+            return false;
+        }
+
+        if (!createIndexBuffer(indices))
         {
             return false;
         }
@@ -961,10 +973,14 @@ private:
         auto const curr_time = std::chrono::high_resolution_clock::now();
         float const delta_time = std::chrono::duration<float, std::chrono::seconds::period>(curr_time - start_time).count();
 
+        static volatile float eye_x = 0.f;
+        static volatile float eye_y = 20.f;
+        static volatile float eye_z = 0.f;
+
         UniforBufferObject ubo = {};
         ubo.m_model = glm::rotate(glm::mat4(1.0f), delta_time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        ubo.m_view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        ubo.m_proj = glm::perspective(glm::radians(45.0f), m_swap_chain_img_ext.width / (float) m_swap_chain_img_ext.height, 0.1f, 10.0f);
+        ubo.m_view = glm::lookAt(glm::vec3(eye_x, eye_y, eye_z), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.m_proj = glm::perspective(glm::radians(45.0f), m_swap_chain_img_ext.width / (float) m_swap_chain_img_ext.height, 0.1f, 200.0f);
         ubo.m_proj[1][1] *= -1; // GLM was originally designed for OpenGL, where the Y coordinate of the clip coordinates is inverted
 
         void * data = nullptr;
@@ -973,13 +989,15 @@ private:
         vkUnmapMemory(m_device, m_uniform_buffers_mem[img_idx]);
     }
 
-    b8 createIndexBuffer()
+    b8 createIndexBuffer(Vector<ui32> &indices)
     {
         VkBuffer staging_buffer;
         VkDeviceMemory staging_buffer_mem;
         void * buffer_data = nullptr;
 
-        if (!createBuffer(sizeof(TEST_MESH_INDICES), 
+        auto const indexBufferMemSize = getVectorMemorySize(indices);
+
+        if (!createBuffer(indexBufferMemSize, 
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
             staging_buffer, 
@@ -990,11 +1008,11 @@ private:
         }
 
         // Make the memory available on CPU for copy i.e. get a CPU visible pointer to this memory
-        vkMapMemory(m_device, staging_buffer_mem, 0, sizeof(TEST_MESH_INDICES), 0, &buffer_data);
-        memcpy(buffer_data, TEST_MESH_INDICES, sizeof(TEST_MESH_INDICES));
+        vkMapMemory(m_device, staging_buffer_mem, 0, indexBufferMemSize, 0, &buffer_data);
+        memcpy(buffer_data, indices.data(), indexBufferMemSize);
         vkUnmapMemory(m_device, staging_buffer_mem);
 
-        if (!createBuffer(sizeof(TEST_MESH_INDICES), 
+        if (!createBuffer(indexBufferMemSize, 
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
                 m_index_buffer, 
@@ -1004,9 +1022,11 @@ private:
             return false;
         }
 
-        copyBuffer(staging_buffer, m_index_buffer, sizeof(TEST_MESH_INDICES));
+        copyBuffer(staging_buffer, m_index_buffer, indexBufferMemSize);
 
         destroyBuffer(staging_buffer, staging_buffer_mem);
+
+        m_model_indices_cnt = indices.size();
 
         return true;
     }
@@ -1276,7 +1296,7 @@ private:
 
         char abs_file_path[PPath::MAX_LEN];
         strCpyT(abs_file_path, FS::getLayerPhysicalPath(HashStr{"data"}));
-        PPath::concat(abs_file_path, "texture.jpg");
+        PPath::concat(abs_file_path, "flash_light.png");
 
         stbi_uc * pixels = stbi_load(abs_file_path, &tex_width, &tex_height, &tex_channels, STBI_rgb_alpha);
         
@@ -1394,13 +1414,67 @@ private:
         endOneTimeCommandBuffer(cmd_buffer);
     }
 
-    b8 createVertexBuffer()
+    b8 loadModel(Vector<Vertex> & vertices, Vector<ui32> & indices)
+    {
+        tinyobj::attrib_t attrib;
+        std::vector<tinyobj::shape_t> shapes;
+        std::vector<tinyobj::material_t> materials;
+        std::string err, warn;
+
+        char model_path[PPath::MAX_LEN];
+        strCpyT(model_path, FS::getLayerPhysicalPath(HashStr{"data"}));
+        PPath::concat(model_path, "flash_light.obj");
+
+        sbLogI(model_path);
+
+        if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, model_path))
+        {
+            sbLogE("Failed to load test model from disc");
+            return false;
+        }
+
+        for (auto const & shape : shapes)
+        {
+            for (auto const & index : shape.mesh.indices)
+            {
+                Vertex vert;
+                
+                vert.m_pos = {
+                    attrib.vertices[3 * index.vertex_index + 0],
+                    attrib.vertices[3 * index.vertex_index + 1],
+                    attrib.vertices[3 * index.vertex_index + 2]
+                };
+
+                vert.m_text = {
+                    attrib.texcoords[2 * index.texcoord_index + 0],
+                    attrib.texcoords[2 * index.texcoord_index + 1]
+                };
+
+                vert.m_color = {1.f, 1.f, 1.f};
+
+                vertices.push_back(vert);
+                indices.push_back(numericCast<ui32>(indices.size()));
+            }
+        }
+
+        return true;
+    }
+
+    template <typename TVector>
+    static usize getVectorMemorySize(TVector const & vect)
+    {
+        return sizeof(typename TVector::value_type) * vect.size();
+    }
+
+    b8 createVertexBuffer( Vector<Vertex> const &vertices)
     {
         VkBuffer staging_buffer;
         VkDeviceMemory staging_buffer_mem;
         void * buffer_data = nullptr;
 
-        if (!createBuffer(sizeof(TEST_MESH_VERTS), 
+        auto const vertBufferMemSize = getVectorMemorySize(vertices);
+
+        if (!createBuffer(vertBufferMemSize, 
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
                 staging_buffer, 
@@ -1411,11 +1485,11 @@ private:
         }
 
         // Make the memory available on CPU for copy i.e. get a CPU visible pointer to this memory
-        vkMapMemory(m_device, staging_buffer_mem, 0, sizeof(TEST_MESH_VERTS), 0, &buffer_data);
-        memcpy(buffer_data, TEST_MESH_VERTS, sizeof(TEST_MESH_VERTS));
+        vkMapMemory(m_device, staging_buffer_mem, 0, vertBufferMemSize, 0, &buffer_data);
+        memcpy(buffer_data, vertices.data(), vertBufferMemSize);
         vkUnmapMemory(m_device, staging_buffer_mem);
 
-        if (!createBuffer(sizeof(TEST_MESH_VERTS), 
+        if (!createBuffer(vertBufferMemSize, 
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
                 m_vertex_buffer, 
@@ -1425,7 +1499,7 @@ private:
             return false;
         }
 
-        copyBuffer(staging_buffer, m_vertex_buffer, sizeof(TEST_MESH_VERTS));
+        copyBuffer(staging_buffer, m_vertex_buffer, vertBufferMemSize);
 
         destroyBuffer(staging_buffer, staging_buffer_mem);
 
@@ -1459,7 +1533,7 @@ private:
         }
 
         VkClearValue clear_val;
-        clear_val.color = {{0.f, 0.f, 0.f, 1.f}};
+        clear_val.color = {{0.5f, 0.5f, 0.5f, 1.f}};
 
         for (usize i = 0 ; i < m_cmd_buffers.size(); ++i)
         {
@@ -1489,11 +1563,11 @@ private:
 
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(m_cmd_buffers[i], 0, 1, &m_vertex_buffer, &offset);
-            vkCmdBindIndexBuffer(m_cmd_buffers[i], m_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+            vkCmdBindIndexBuffer(m_cmd_buffers[i], m_index_buffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdBindDescriptorSets(m_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 0, 1, &m_desc_sets[i], 0, nullptr);
 
             //vkCmdDraw(m_cmd_buffers[i], wstd::size(TEST_MESH_VERTS), 1, 0, 0);
-            vkCmdDrawIndexed(m_cmd_buffers[i], (ui32)wstd::size(TEST_MESH_INDICES), 1, 0, 0, 0);
+            vkCmdDrawIndexed(m_cmd_buffers[i], (ui32)m_model_indices_cnt, 1, 0, 0, 0);
 
             vkCmdEndRenderPass(m_cmd_buffers[i]);
 
