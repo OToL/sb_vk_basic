@@ -24,6 +24,7 @@
 #include <core/container/small_vector.h>
 #include <core/memory/memory_arena.h>
 #include <core/memory/utility.h>
+#include <core/timer.h>
 
 // TODO: create wrapper/ext
 #define STB_IMAGE_IMPLEMENTATION
@@ -46,6 +47,7 @@
 #include <libc++/algorithm>
 #include <libc++/limits>
 #include <libc++/span>
+#include <libc++/iterator>
 
 // TODO: do we need these
 #include <chrono>
@@ -173,6 +175,10 @@ class VkTestApp
     VkSampler m_texture_sampler = VK_NULL_HANDLE;
 
     usize m_model_indices_cnt = 0;
+
+    float m_camera_x = 30.f;
+    float m_camera_y = 0.f;
+    float m_camera_z = 0.f;
 
     struct QueueFamiliesDesc
     {
@@ -973,13 +979,9 @@ private:
         auto const curr_time = std::chrono::high_resolution_clock::now();
         float const delta_time = std::chrono::duration<float, std::chrono::seconds::period>(curr_time - start_time).count();
 
-        static volatile float eye_x = 0.f;
-        static volatile float eye_y = 20.f;
-        static volatile float eye_z = 0.f;
-
         UniforBufferObject ubo = {};
         ubo.m_model = glm::rotate(glm::mat4(1.0f), delta_time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        ubo.m_view = glm::lookAt(glm::vec3(eye_x, eye_y, eye_z), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.m_view = glm::lookAt(glm::vec3(m_camera_x, m_camera_y, m_camera_z), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         ubo.m_proj = glm::perspective(glm::radians(45.0f), m_swap_chain_img_ext.width / (float) m_swap_chain_img_ext.height, 0.1f, 200.0f);
         ubo.m_proj[1][1] *= -1; // GLM was originally designed for OpenGL, where the Y coordinate of the clip coordinates is inverted
 
@@ -2383,6 +2385,8 @@ int main()
 
     b8 const app_err = app.initialize(wnd_hdl, true, true);
     sbAssert(app_err);
+
+    // Timer::Ctx timer_ctx = Timer::GetCtx();
 
     while (!glfwWindowShouldClose(wnd_hdl))
     {
