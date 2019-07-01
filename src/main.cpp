@@ -23,7 +23,7 @@
 #include <core/io/file_system_layer.h>
 #include <core/container/small_vector.h>
 #include <core/memory/memory_arena.h>
-#include <core/memory/utility.h>
+#include <core/memory/memory.h>
 #include <core/timer.h>
 
 // TODO: create wrapper/ext
