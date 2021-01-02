@@ -765,7 +765,7 @@ private:
         zeroStructArray(m_in_flight_fences);
     }
 
-    ui32 findMemoryType(ui32 mem_types_mask, VkMemoryPropertyFlags props)
+    ui32 findVkDeviceMemoryTypeIndex(ui32 mem_types_mask, VkMemoryPropertyFlags props)
     {
         VkPhysicalDeviceMemoryProperties mem_props;
         vkGetPhysicalDeviceMemoryProperties(m_phys_device, &mem_props);
@@ -800,7 +800,7 @@ private:
         VkMemoryRequirements mem_req;
         vkGetBufferMemoryRequirements(m_device, buffer, &mem_req);
 
-        ui32 const mem_type_idx = findMemoryType(mem_req.memoryTypeBits, mem_pros);
+        ui32 const mem_type_idx = findVkDeviceMemoryTypeIndex(mem_req.memoryTypeBits, mem_pros);
         if (wstd::numeric_limits<ui32>::max() == mem_type_idx)
         {
             sbLogE("failed to find memory type index for the buffer");
@@ -1060,7 +1060,7 @@ private:
         VkMemoryAllocateInfo img_alloc_info = {};
         img_alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         img_alloc_info.allocationSize = img_mem_req.size;
-        img_alloc_info.memoryTypeIndex = findMemoryType(img_mem_req.memoryTypeBits, properties);
+        img_alloc_info.memoryTypeIndex = findVkDeviceMemoryTypeIndex(img_mem_req.memoryTypeBits, properties);
 
         if (VK_SUCCESS != vkAllocateMemory(m_device, &img_alloc_info, nullptr, &img_mem))
         {
